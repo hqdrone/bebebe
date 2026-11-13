@@ -1,0 +1,20 @@
+{
+  "name": "Повторялка",
+  "short_name": "Повторялка",
+  "description": "Скажи что-нибудь — пиксельный дразнилка повторит смешным голосом!",
+  "lang": "ru",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#fff3dc",
+  "theme_color": "#fff3dc",
+  "categories": ["kids", "entertainment"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

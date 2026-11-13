@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Повторялка</title>
+<meta name="description" content="Скажи что-нибудь — пиксельный дразнилка повторит смешным голосом!">
+<meta name="theme-color" content="#fff3dc">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="app" aria-hidden="true">
+  <div id="stage">
+    <div id="heroWrap">
+      <canvas id="hero" width="56" height="50" role="button" aria-label="Персонаж: нажми, чтобы повторить ещё раз"></canvas>
+      <div id="bubble" class="px" hidden>бе-бе!</div>
+    </div>
+  </div>
+  <div id="status" aria-live="polite">Говори!</div>
+  <div id="grid" role="radiogroup" aria-label="Персонажи"></div>
+  <label id="sens">
+    <span class="sens-row"><span>Чувствительность</span><span id="sensBars" aria-hidden="true"></span></span>
+    <input id="sensInput" type="range" min="0" max="100" step="1" aria-label="Чувствительность микрофона">
+  </label>
+</main>
+
+<div id="start">
+  <h1>Повторялка</h1>
+  <canvas id="startHero" width="56" height="50" aria-hidden="true"></canvas>
+  <p class="hint">Скажи что-нибудь —<br>я повторю!</p>
+  <button id="playBtn" class="px-btn big" type="button">Играть</button>
+  <p id="err" hidden></p>
+</div>
+
+<script src="sprites.js"></script>
+<script src="vad.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
