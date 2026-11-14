@@ -1,22 +1,17 @@
-/* Повторялка — интерфейс, звук, анимация. */
+/* Повторялка — интерфейс, звук, реакции, анимация. */
 (() => {
   'use strict';
   const SP = window.Sprites;
+  const PV = window.PovtVoices;
   const PovtVAD = window.PovtVAD;
   const $ = (s) => document.querySelector(s);
+  const VOICES = PV.VOICES;
+  const K = SP.COLORS;
 
-  // ---------- голоса ----------
-  const VOICES = {
-    squirrel: { rate: 1.65 },
-    mouse:    { rate: 2.05 },
-    bear:     { rate: 0.68 },
-    robot:    { rate: 1.0, ring: 55, ringMix: 0.8 },
-    alien:    { rate: 1.3, ring: 380, ringMix: 0.6 },
-    monster:  { rate: 0.55, ring: 28, ringMix: 0.7 },
-    parrot:   { rate: 1.0, delay: 0.28, feedback: 0.45 },
-    cube:     { random: true },
-  };
-  const MUTE_AFTER = 0.45; // с: игнор микрофона после воспроизведения
+  const MUTE_AFTER = 0.45;     // с: игнор микрофона после любого звука из динамика
+  const EXTRA_CHANCE = 0.3;    // шанс «добавки» после фразы
+  const SLEEP_AFTER = 30000;   // мс тишины до засыпания
+  const SHOUT_RMS = 0.22;      // крик (абсолютный RMS)
 
   // ---------- настройки ----------
   const KEY_THR = 'povt.minThr', KEY_CHAR = 'povt.char';
@@ -39,7 +34,7 @@
   const sensInput = $('#sensInput'), sensBars = $('#sensBars');
   const HW = 56, HH = 50;
 
-  // сетка выбора
+  // выбор персонажа
   const picks = {};
   SP.ORDER.forEach((id) => {
     const b = document.createElement('button');
@@ -56,10 +51,14 @@
     grid.appendChild(b);
     picks[id] = b;
   });
-  function markPick() {
+  function markPick(scroll) {
     for (const id in picks) picks[id].setAttribute('aria-checked', id === current ? 'true' : 'false');
+    if (scroll) {
+      const b = picks[current];
+      grid.scrollLeft = Math.max(0, b.offsetLeft - (grid.clientWidth - b.offsetWidth) / 2);
+    }
   }
-  markPick();
+  markPick(true);
 
   // ползунок
   for (let i = 0; i < 6; i++) { const e = document.createElement('i'); e.style.height = (4 + i * 2) + 'px'; sensBars.appendChild(e); }
@@ -76,7 +75,7 @@
     showSens();
   });
 
-  // ---------- размер героя ----------
+  // размер героя: целый масштаб
   function fitHero() {
     const r = stage.getBoundingClientRect();
     const s = Math.max(1, Math.floor(Math.min(r.width / HW, r.height / HH)));
@@ -87,11 +86,17 @@
   if (window.ResizeObserver) new ResizeObserver(fitHero).observe(stage);
   window.addEventListener('resize', fitHero);
 
-  // ---------- звук ----------
+  // ---------- состояние ----------
   let ctx = null, vad = null, stream = null, master = null, analyser = null, anBuf = null;
-  let started = false, lastBuffer = null, playing = null, playToken = 0, lastRandom = null;
-  let mode = 'idle', shownId = current, tongueUntil = 0, palm = false, inLevel = 0;
+  let started = false, lastBuffer = null, playing = null, audioToken = 0, lastRandom = null;
+  // mode: idle | tease | extra | tongue | tickle | angry | yawn | sleep | wake
+  let mode = 'idle', modeAt = 0, modeUntil = 0, shownId = current, palm = false, extraName = null;
+  let inLevel = 0, shoutUntil = 0, speechAt = 0, speechMax = 0, lastLively = performance.now();
+  let taps = [], phraseTimes = [];
+  const now = () => performance.now();
+  function setMode(m, ms) { mode = m; modeAt = now(); modeUntil = ms ? modeAt + ms : 0; }
 
+  // ---------- звук ----------
   const WORKLET = `
     class PovtCapture extends AudioWorkletProcessor {
       constructor() { super(); this.buf = new Float32Array(2048); this.n = 0; }
@@ -116,7 +121,6 @@
     });
     await ctx.resume();
 
-    // выход: master → компрессор → анализатор → динамик
     master = ctx.createGain(); master.gain.value = 1;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -10; comp.ratio.value = 4;
@@ -124,12 +128,13 @@
     anBuf = new Float32Array(analyser.fftSize);
     master.connect(comp); comp.connect(analyser); analyser.connect(ctx.destination);
 
-    // вход
     vad = new PovtVAD(ctx.sampleRate, { minThr });
+    vad.onStart = () => { speechAt = now(); speechMax = 0; };
     vad.onPhrase = (samples) => {
       const buf = ctx.createBuffer(1, samples.length, ctx.sampleRate);
       buf.copyToChannel(samples, 0);
       lastBuffer = buf;
+      phraseTimes.push(now());
       play(buf);
     };
     const src = ctx.createMediaStreamSource(stream);
@@ -144,13 +149,18 @@
       node = ctx.createScriptProcessor(2048, 1, 1);
       node.onaudioprocess = (e) => onFrame(new Float32Array(e.inputBuffer.getChannelData(0)));
     }
-    const sink = ctx.createGain(); sink.gain.value = 0; // узел должен быть в графе, звука нет
+    const sink = ctx.createGain(); sink.gain.value = 0;
     src.connect(node); node.connect(sink); sink.connect(ctx.destination);
   }
 
   function onFrame(frame) {
     vad.process(frame);
-    inLevel = vad.muted ? 0 : vad.lastRms / vad.threshold();
+    if (vad.muted) { inLevel = 0; return; }
+    inLevel = vad.lastRms / vad.threshold();
+    const t = now();
+    if (inLevel > 0.7) lastLively = t;
+    if (vad.speaking) speechMax = Math.max(speechMax, inLevel);
+    if (vad.lastRms > SHOUT_RMS && inLevel > 5) shoutUntil = t + 700;
   }
 
   function outLevel() {
@@ -162,7 +172,7 @@
   }
 
   function stopVoice() {
-    playToken++;
+    audioToken++;
     if (!playing) return;
     for (const n of playing.nodes) {
       try { if (n.stop) n.stop(); } catch (e) { /* уже остановлен */ }
@@ -170,98 +180,132 @@
     }
     playing = null;
   }
+  // микрофон глушится на всё время звука и ещё MUTE_AFTER после
+  function releaseAfter(sec) {
+    const tok = audioToken;
+    setTimeout(() => {
+      if (tok !== audioToken) return;
+      stopVoice();
+      vad.unmuteAfter(MUTE_AFTER);
+    }, sec * 1000);
+  }
+  function at(sec, fn) { const tok = audioToken; setTimeout(() => { if (tok === audioToken) fn(); }, sec * 1000); }
+
+  function pickVoice() {
+    if (!VOICES[current].random) return current;
+    const pool = SP.ORDER.filter((i) => !VOICES[i].random && i !== lastRandom);
+    lastRandom = pool[Math.floor(Math.random() * pool.length)];
+    return lastRandom;
+  }
 
   function play(buf) {
     if (!ctx || !buf) return;
     stopVoice();
     vad.mute();
-    let id = current;
-    if (VOICES[id].random) {
-      const pool = SP.ORDER.filter((i) => !VOICES[i].random && i !== lastRandom);
-      id = pool[Math.floor(Math.random() * pool.length)];
-      lastRandom = id;
-    }
-    const v = VOICES[id];
+    lastLively = now();
+    const id = pickVoice();
     shownId = id;
-
-    const t0 = ctx.currentTime + 0.03;
-    const nodes = [];
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.playbackRate.value = v.rate;
-    const out = ctx.createGain();
-    nodes.push(src, out);
-    if (v.ring) {
-      // ring modulation: сигнал × синус (gain=0 + осциллятор на gain)
-      const ring = ctx.createGain(); ring.gain.value = 0;
-      const osc = ctx.createOscillator(); osc.frequency.value = v.ring;
-      osc.connect(ring.gain);
-      const wet = ctx.createGain(); wet.gain.value = v.ringMix * 1.6;
-      const dry = ctx.createGain(); dry.gain.value = 1 - v.ringMix;
-      src.connect(ring); ring.connect(wet); wet.connect(out);
-      src.connect(dry); dry.connect(out);
-      osc.start(t0);
-      nodes.push(osc, ring, wet, dry);
-    } else {
-      src.connect(out);
+    const r = PV.speak(ctx, buf, id, master);
+    const nodes = r.nodes;
+    let end = r.dur + r.tail;
+    let extra = null;
+    if (Math.random() < EXTRA_CHANCE) {
+      extra = PV.SFX_NAMES[Math.floor(Math.random() * PV.SFX_NAMES.length)];
+      const s = PV.sfx(ctx, extra, master, PV.pitchOf(id), r.t0 + r.dur + 0.12);
+      nodes.push(...s.nodes);
+      extra = { name: extra, at: r.dur + 0.12, dur: s.dur };
+      end = Math.max(end, extra.at + s.dur);
     }
-    let tail = 0.05;
-    if (v.delay) {
-      const d = ctx.createDelay(2); d.delayTime.value = v.delay;
-      const fb = ctx.createGain(); fb.gain.value = v.feedback;
-      const ew = ctx.createGain(); ew.gain.value = 0.8;
-      out.connect(d); d.connect(fb); fb.connect(d); d.connect(ew); ew.connect(master);
-      nodes.push(d, fb, ew);
-      tail = v.delay * Math.ceil(Math.log(0.02) / Math.log(v.feedback));
-    }
-    out.connect(master);
-    src.start(t0);
-
-    const dur = buf.duration / v.rate;
-    const token = playToken;
     playing = { nodes };
-    mode = 'tease';
-    bubble.hidden = false;
-    bubble.classList.remove('pop'); void bubble.offsetWidth; bubble.classList.add('pop');
-    setTimeout(() => {
-      if (token !== playToken) return;
-      mode = 'tongue';
-      palm = Math.random() < 0.35;
-      tongueUntil = performance.now() + 600 + Math.random() * 400;
-    }, (dur + 0.03) * 1000);
-    setTimeout(() => {
-      if (token !== playToken) return;
-      stopVoice();
-      vad.unmuteAfter(MUTE_AFTER);
-    }, (dur + tail + 0.08) * 1000);
+    setMode('tease');
+    showBubble('бе-бе!');
+    if (extra) at(extra.at, () => { setMode('extra', extra.dur * 1000 + 100); extraName = extra.name; showBubble(EXTRA_TEXT[extra.name]); });
+    else at(r.dur + 0.03, startTongue);
+    releaseAfter(end + 0.08);
+  }
+
+  function startTongue() { setMode('tongue', 600 + Math.random() * 400); palm = Math.random() < 0.35; showBubble('бе-бе!'); }
+
+  function playSfx(name, id) {
+    if (!ctx) return 0;
+    stopVoice();
+    vad.mute();
+    const s = PV.sfx(ctx, name, master, PV.pitchOf(id || current));
+    playing = { nodes: s.nodes };
+    releaseAfter(s.dur + 0.08);
+    return s.dur;
+  }
+
+  const EXTRA_TEXT = { hiccup: 'ик!', sneeze: 'апчхи!', giggle: 'хи-хи!', raspberry: 'пфррр!' };
+  let bubbleText = '';
+  function showBubble(text) {
+    if (!text) { bubble.hidden = true; bubbleText = ''; return; }
+    if (bubble.hidden || bubbleText !== text) {
+      bubble.textContent = text;
+      bubbleText = text;
+      bubble.hidden = false;
+      bubble.classList.remove('pop'); void bubble.offsetWidth; bubble.classList.add('pop');
+    }
   }
 
   function select(id) {
     current = id;
     store.set(KEY_CHAR, id);
-    markPick();
-    if (mode === 'idle') shownId = id;
+    markPick(false);
+    lastLively = now();
+    if (mode === 'sleep' || mode === 'yawn') wake();
+    if (mode === 'idle' || mode === 'wake') shownId = id;
     if (started && lastBuffer) play(lastBuffer);
   }
 
+  // ---------- реакции ----------
+  function wake() {
+    stopVoice();
+    if (vad && vad.muted) vad.unmuteAfter(0.1);
+    shownId = current;
+    setMode('wake', 800);
+    showBubble('ой!');
+    lastLively = now();
+  }
+
   hero.addEventListener('click', () => {
-    if (started && lastBuffer) play(lastBuffer);
-    else pokeUntil = performance.now() + 500;
+    const t = now();
+    lastLively = t;
+    if (!started) { setMode('tickle', 700); return; }
+    if (mode === 'sleep' || mode === 'yawn') { wake(); return; }
+    if (mode === 'angry') return;                // сердится — не мешаем
+    taps = taps.filter((x) => t - x < 2500);
+    taps.push(t);
+    if (taps.length >= 5) {                       // затыкали — сердится
+      taps = [];
+      shownId = current;
+      setMode('angry', 1700);
+      showBubble('хмф!');
+      playSfx('hmph');
+      return;
+    }
+    const busy = mode === 'tease' || mode === 'extra' || mode === 'tongue' || mode === 'tickle';
+    if (busy || !lastBuffer) {                   // щекотка
+      shownId = mode === 'idle' ? current : shownId;
+      setMode('tickle', 900);
+      showBubble('хи-хи!');
+      playSfx('giggle', shownId);
+      return;
+    }
+    play(lastBuffer);                            // повтор последней фразы
   });
 
   // ---------- wake lock ----------
-  let wakeLock = null;
   async function keepAwake() {
     try {
-      if ('wakeLock' in navigator && document.visibilityState === 'visible') {
-        wakeLock = await navigator.wakeLock.request('screen');
-      }
+      if ('wakeLock' in navigator && document.visibilityState === 'visible') await navigator.wakeLock.request('screen');
     } catch (e) { /* не страшно */ }
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && started) {
       keepAwake();
       if (ctx && ctx.state !== 'running') ctx.resume();
+      lastLively = now();
     }
   });
 
@@ -273,9 +317,12 @@
     try {
       await startAudio();
       started = true;
+      lastLively = now();
+      setMode('idle');
       $('#start').hidden = true;
       $('#app').removeAttribute('aria-hidden');
       fitHero();
+      markPick(true);
       keepAwake();
     } catch (e) {
       console.warn('Повторялка: нет микрофона', e);
@@ -289,66 +336,149 @@
   });
 
   // ---------- анимация (10 fps) ----------
-  let tick = 0, lastT = 0, nextBlink = 0, blinkUntil = 0, pokeUntil = 0, lastStatus = '';
+  let tick = 0, lastT = 0, nextBlink = 0, blinkUntil = 0, lastStatus = '';
+  const FLOAT = [0, 0, -1, -1, -1, 0, 0, 1, 1, 1];
 
-  function pose(now, idle) {
-    const p = { t: tick, eyes: 'normal', mouth: 'smile', earUp: 0, bob: (tick >> 1) & 1, flap: 0, palm: false, finger: tick & 1 };
-    let dx = 0, dy = 0, tilt = 0, hearing = false;
-    if (!idle && mode === 'tease') {
-      const lv = outLevel();
-      p.mouth = lv < 0.015 ? 'smile' : lv < 0.06 ? 'half' : 'open';
-      p.eyes = tick % 8 < 6 ? 'squint' : 'normal';
-      dy = [0, -1, -2, -1][tick % 4];
-      const sw = (tick >> 1) & 1 ? 1 : -1;
-      dx = sw; tilt = sw * 0.09;
-      p.flap = lv > 0.02 ? tick & 1 : 0;
-      p.bob = tick & 1;
-    } else if (!idle && mode === 'tongue') {
-      p.mouth = 'tongue'; p.eyes = 'squint'; p.palm = palm;
-      dy = tick & 1 ? -1 : 0;
-      p.flap = tick & 1;
-    } else {
-      hearing = !idle && vad && !vad.muted && (vad.speaking || inLevel > 0.7);
-      if (hearing) {
-        p.eyes = 'wide'; p.earUp = 1; tilt = 0.13; p.bob = tick & 1;
-      } else {
-        dy = ((tick / 5) | 0) % 2; // дыхание
-        if (now > nextBlink) { blinkUntil = now + 160; nextBlink = now + 2000 + Math.random() * 2000; }
-        if (now < blinkUntil) p.eyes = 'blink';
-        if (now < pokeUntil) { p.eyes = 'happy'; dy = -1; }
+  // переходы между режимами по времени
+  function advance(t) {
+    if (!started) { if (mode === 'tickle' && t > modeUntil) setMode('idle'); return; }
+    if (modeUntil && t > modeUntil) {
+      if (mode === 'yawn') { setMode('sleep'); showBubble(''); return; }
+      if (mode === 'extra') { startTongue(); return; }
+      setMode('idle'); shownId = current; showBubble('');
+    }
+    if (mode === 'sleep' && (inLevel > 1 || (vad && vad.speaking))) { wake(); return; }
+    if (mode === 'idle' && vad && !vad.speaking && !vad.muted && t - lastLively > SLEEP_AFTER) {
+      setMode('yawn', 1500);
+      showBubble('');
+      playSfx('yawn');
+    }
+  }
+
+  function moodHigh(t) {
+    phraseTimes = phraseTimes.filter((x) => t - x < 120000);
+    return phraseTimes.length >= 4;
+  }
+
+  function pose(t) {
+    const p = { t: tick, eyes: 'normal', mouth: 'smile', earUp: 0, bob: (tick >> 1) & 1, flap: 0, palm: false, finger: tick & 1, paws: null, blush: K.P };
+    let dx = 0, dy = 0, tilt = 0;
+    const glyphs = [];
+    let status = 'Говори!';
+    const el = t - modeAt;
+    const alt = tick & 1 ? 1 : -1;
+
+    switch (mode) {
+      case 'tease': {
+        const lv = outLevel();
+        p.mouth = lv < 0.015 ? 'smile' : lv < 0.06 ? 'half' : 'open';
+        p.eyes = tick % 8 < 6 ? 'squint' : 'normal';
+        dy = [0, -1, -2, -1][tick % 4];
+        const sw = (tick >> 1) & 1 ? 1 : -1;
+        dx = sw; tilt = sw * 0.09;
+        p.flap = lv > 0.02 ? tick & 1 : 0;
+        p.bob = tick & 1;
+        status = 'Бе-бе-бе!';
+        break;
+      }
+      case 'extra':
+        status = 'Бе-бе-бе!';
+        if (extraName === 'hiccup') {
+          p.eyes = 'wide'; p.mouth = 'half'; dy = el < 200 ? -3 : 0;
+          glyphs.push(['bang', 47, 3, 2, K.K]);
+        } else if (extraName === 'sneeze') {
+          if (el < 650) { p.eyes = 'happy'; p.mouth = 'half'; tilt = -0.12; dy = -1; }
+          else { p.eyes = 'squint'; p.mouth = 'open'; tilt = 0.15; dx = 1; glyphs.push(['drop', 46, 18, 1, K.S], ['drop', 50, 24, 1, K.S]); }
+        } else if (extraName === 'giggle') {
+          p.eyes = 'happy'; p.mouth = tick & 1 ? 'open' : 'half'; dx = alt; dy = -(tick & 1);
+        } else {
+          p.eyes = 'squint'; p.mouth = tick & 1 ? 'tongue' : 'half'; dx = alt;
+        }
+        break;
+      case 'tongue':
+        p.mouth = 'tongue'; p.eyes = 'squint'; p.palm = palm;
+        dy = tick & 1 ? -1 : 0; p.flap = tick & 1;
+        status = 'Бе-бе-бе!';
+        break;
+      case 'tickle':
+        p.eyes = 'happy'; p.mouth = tick & 1 ? 'open' : 'half';
+        dx = alt; dy = -(tick & 1); tilt = alt * 0.1; p.flap = tick & 1;
+        glyphs.push(['heart', 45, 4 - (tick >> 1) % 3, 1, K.R]);
+        status = 'Ой, щекотно!';
+        break;
+      case 'angry':
+        p.eyes = 'angry'; p.mouth = 'frown'; p.blush = K.R; dx = alt;
+        glyphs.push(['puff', 6 + (tick % 3), 4 - (tick % 3), 1, K.G], ['puff', 44 - (tick % 3), 4 - ((tick + 1) % 3), 1, K.G]);
+        status = 'Ну хватит!';
+        break;
+      case 'yawn':
+        p.eyes = 'blink'; p.mouth = 'open'; tilt = -0.08; dy = -1;
+        status = 'А-а-ам…';
+        break;
+      case 'sleep': {
+        p.eyes = 'blink';
+        const slow = (tick / 10 | 0) % 2;
+        p.mouth = slow ? 'half' : 'smile'; dy = slow;
+        const z = (tick >> 2) % 4;
+        glyphs.push(['z', 44, 12 - z * 3, 1, K.K]);
+        if (z > 1) glyphs.push(['z', 47, 9 - z * 2, 1, K.L]);
+        status = 'Хр-р-р…';
+        break;
+      }
+      case 'wake':
+        p.eyes = 'wide'; p.mouth = 'half'; dy = el < 250 ? -3 : -1;
+        glyphs.push(['bang', 47, 2, 2, K.R]);
+        status = 'Ой! Не сплю!';
+        break;
+      default: { // idle / слушает
+        const hearing = started && vad && !vad.muted && (vad.speaking || inLevel > 0.7);
+        if (hearing && t < shoutUntil) {                    // крик — закрывает уши
+          p.eyes = 'squint'; p.mouth = 'frown'; p.paws = 'cover'; dx = alt;
+          glyphs.push(['bang', 47, 2, 2, K.R], ['bang', 4, 4, 1, K.R]);
+          status = 'Ой, громко!';
+        } else if (hearing) {
+          const whisper = vad.speaking && t - speechAt > 500 && speechMax < 2.5;
+          p.eyes = 'wide'; p.earUp = 1; tilt = whisper ? 0.2 : 0.13; p.bob = tick & 1;
+          if (whisper) { p.paws = 'cup'; dx = 1; }
+          const up = (tick >> 1) & 1;
+          const big = inLevel > 1.8 ? 2 : 1;
+          glyphs.push(['q', big > 1 ? 45 : 47, (big > 1 ? 0 : 5) + up, big, K.K]);
+          if (inLevel > 1.1) glyphs.push(['note', 2, 10 - up, inLevel > 2.5 ? 2 : 1, K.R]);
+          if (inLevel > 3) glyphs.push(['note', 6, 30 + up, 1, K.S]);
+          status = vad.speaking ? (whisper ? 'Шепчешь? Слушаю…' : 'Слушаю…') : 'Говори!';
+        } else {
+          dy = ((tick / 5) | 0) % 2;
+          if (t > nextBlink) { blinkUntil = t + 160; nextBlink = t + 2000 + Math.random() * 2000; }
+          if (t < blinkUntil) p.eyes = 'blink';
+          if (started && moodHigh(t) && tick % 60 < 12) { // хорошее настроение — пританцовывает
+            p.eyes = 'happy'; dy = [0, -1, -2, -1][tick % 4]; tilt = ((tick >> 1) & 1 ? 1 : -1) * 0.08;
+            glyphs.push(['heart', 45, 3, 1, K.R]);
+          }
+        }
       }
     }
-    return { p, dx, dy, tilt, hearing };
+    return { p, dx, dy, tilt, glyphs, status };
   }
 
-  function render(now) {
-    const idle = !started;
-    if (mode === 'tongue' && now > tongueUntil) { mode = 'idle'; shownId = current; bubble.hidden = true; }
-    const { p, dx, dy, tilt, hearing } = pose(now, idle);
-    const id = idle || mode === 'idle' ? current : shownId;
+  function render(t) {
+    advance(t);
+    const { p, dx, dy, tilt, glyphs, status } = pose(t);
+    const id = mode === 'idle' || !started ? current : shownId;
+    const fl = SP.CHARS[id].float ? FLOAT[tick % 10] : 0;
     const g = SP.build(id, p);
-    const c2 = idle ? sctx : hctx;
+    const c2 = started ? hctx : sctx;
     c2.clearRect(0, 0, HW, HH);
-    SP.draw(c2, g, 12 + dx, 14 + dy, tilt);
-    if (hearing) {
-      const up = (tick >> 1) & 1;
-      const big = inLevel > 1.8 ? 2 : 1;
-      SP.glyph(c2, 'q', big > 1 ? 45 : 47, (big > 1 ? 0 : 5) + up, big, SP.COLORS.K);
-      if (inLevel > 1.1) SP.glyph(c2, 'note', 2, 10 - up, inLevel > 2.5 ? 2 : 1, SP.COLORS.R);
-      if (inLevel > 3) SP.glyph(c2, 'note', 6, 30 + up, 1, SP.COLORS.S);
-    }
-    if (started) {
-      const st = mode !== 'idle' ? 'Бе-бе-бе!' : vad && vad.speaking ? 'Слушаю…' : 'Говори!';
-      if (st !== lastStatus) { statusEl.textContent = st; lastStatus = st; }
-    }
+    SP.draw(c2, g, 12 + dx, 14 + dy + fl, tilt);
+    for (const [name, x, y, sc, col] of glyphs) SP.glyph(c2, name, x, y, sc, col);
+    if (started && status !== lastStatus) { statusEl.textContent = status; lastStatus = status; }
   }
 
-  function loop(now) {
+  function loop(t) {
     requestAnimationFrame(loop);
-    if (now - lastT < 100) return;
-    lastT = now;
+    if (t - lastT < 100) return;
+    lastT = t;
     tick++;
-    render(now);
+    render(t);
   }
   requestAnimationFrame(loop);
   fitHero();
@@ -358,11 +488,18 @@
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('SW', e));
     });
+    // новая версия приложения: перезагружаемся, пока игра ещё не начата
+    let reloaded = false;
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController && !started && !reloaded) { reloaded = true; location.reload(); }
+    });
   }
 
   // для отладки и автотестов
   window.__povt = {
-    get state() { return { mode, current, shownId, started, minThr, speaking: !!(vad && vad.speaking), muted: !!(vad && vad.muted), hasPhrase: !!lastBuffer }; },
+    get state() { return { mode, current, shownId, started, minThr, extraName, speaking: !!(vad && vad.speaking), muted: !!(vad && vad.muted), hasPhrase: !!lastBuffer }; },
+    set sleepAfter(ms) { lastLively = now() - SLEEP_AFTER + ms; },
     get ctx() { return ctx; },
   };
 })();

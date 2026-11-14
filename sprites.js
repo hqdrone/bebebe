@@ -56,6 +56,13 @@
     }
   }
   const mirrorX = (x, w) => N - x - w;
+  // отдельный слой со своим контуром (чтобы передний предмет обводился поверх заднего)
+  function layer(g, fn) {
+    const t = grid();
+    fn(t);
+    outline(t);
+    for (let i = 0; i < t.d.length; i++) if (t.d[i]) g.d[i] = t.d[i];
+  }
 
   // ---------- лицо ----------
   const EYES = {
@@ -64,19 +71,30 @@
     blink:  ['....', '....', '....', 'KKKK', '....'],
     happy:  ['....', '.KK.', 'K..K', '....', '....'],
     squint: ['K...', '.KK.', '...K', '.KK.', 'K...'],
+    angry:  ['K...', '.KK.', 'KKKK', 'KKKK', '.KK.'],
+  };
+  // мини-глаза 2×2 (цыплята, улитка)
+  const EYES_MINI = {
+    normal: ['WK', 'KK'], wide: ['WK', 'KK', 'KK'], blink: ['..', 'KK'], happy: ['KK', '..'],
+    squint: ['K.', '.K'], angry: ['K.', 'KK'],
   };
   const MOUTH = {
     smile:  ['K..K', '.KK.'],
     half:   ['.KKKK.', 'KRRRRK', '.KKKK.'],
     open:   ['.KKKK.', 'KRRRRK', 'KRRRRK', 'KRPPRK', '.KKKK.'],
     tongue: ['KKKKKK', '.KRRK.', '.KRPK.', '..KK..'],
+    frown:  ['.KK.', 'K..K'],
   };
+  const MOUTH_MINI = { smile: ['K.K', '.K.'], half: ['.K.', 'KRK', '.K.'], open: ['.K.', 'KRK', 'KRK', '.K.'], tongue: ['KKK', '.R.', '.R.'], frown: ['.K.', 'K.K'] };
+  const BEAK_MINI = { smile: ['OO'], half: ['OO', 'OO'], open: ['OO', 'RR', 'OO'], tongue: ['OO', 'RR', '.R'], frown: ['OO'] };
   const BEAK = {
     smile:  ['OOOO', 'OOOO', '.OO.'],
     half:   ['OOOO', 'KRRK', '.OO.'],
     open:   ['OOOO', 'KRRK', 'KRRK', '.OO.'],
     tongue: ['OOOO', 'KRRK', '.RR.', '.RP.', '..K.'],
+    frown:  ['OOOO', 'OOOO', '.OO.'],
   };
+  const PAW = ['.KKK.', 'KPPPK', 'KPPPK', 'KPPPK', 'KPPPK', '.KKK.'];
   const HAND = [
     '....K.K.K..',
     '...KXKXKXK.',
@@ -91,12 +109,12 @@
     const my = f.my != null ? f.my : 16, by = f.by != null ? f.by : 16, bx = f.bx != null ? f.bx : 6;
     let kind = p.eyes || 'normal';
     if (f.big && kind === 'normal') kind = 'wide';
-    const st = EYES[kind], w = st[0].length, big = st.length > 5;
+    const st = EYES[kind] || EYES.normal, w = st[0].length, big = st.length > 5;
     const x1 = big ? lx - 1 : lx, y1 = big ? ey - 1 : ey;
-    const mir = kind === 'squint' || kind === 'happy';
+    const mir = kind === 'squint' || kind === 'happy' || kind === 'angry';
     stamp(g, x1, y1, st, 0, false);
     stamp(g, mirrorX(x1, w), y1, st, 0, mir);
-    if (!f.noBlush) { stamp(g, bx, by, ['PPP']); stamp(g, mirrorX(bx, 3), by, ['PPP']); }
+    if (!f.noBlush) { const bl = p.blush === R ? ['RRR'] : ['PPP']; stamp(g, bx, by, bl); stamp(g, mirrorX(bx, 3), by, bl); }
     const m = (f.beak ? BEAK : MOUTH)[p.mouth || 'smile'];
     stamp(g, 16 - m[0].length / 2, my, m);
     return my;
@@ -163,6 +181,54 @@
         ell(g, 16, 26, 5, 3, c);
         face(g, p, { ey: 9, my: 18, by: 15, bx: 5 });
         stamp(g, 14, 15, ['KKKK', 'KWKK', '.KK.']); // нос
+      },
+    },
+    raccoon: {
+      name: 'Енот-путаник', color: G,
+      build(g, p) {
+        const sw = [0, 1, 1, 0, -1, -1][p.t % 6];
+        ell(g, 26 + sw, 19, 4, 8, G);
+        ell(g, 8, 6.5 - (p.earUp < 0 ? 1 : 0), 3, 3.5, G);
+        ell(g, 24, 6.5 - (p.earUp > 0 ? 1 : 0), 3, 3.5, G);
+        ell(g, 16, 13.5, 11.5, 9.5, G);
+        ell(g, 16, 25, 8, 5, G);
+        ell(g, 8.5, 24, 2, 2.5, G); ell(g, 23.5, 24, 2, 2.5, G);
+        ell(g, 11.5, 29.2, 2.5, 1.4, B); ell(g, 20.5, 29.2, 2.5, 1.4, B);
+        outline(g);
+        for (const y of [13, 14, 18, 19, 23, 24]) for (let x = 25; x < 31; x++) if (g.d[y * N + x] === G) g.d[y * N + x] = B;
+        ell(g, 8, 6.5 - (p.earUp < 0 ? 1 : 0), 1.5, 2, B);
+        ell(g, 24, 6.5 - (p.earUp > 0 ? 1 : 0), 1.5, 2, B);
+        ell(g, 11.5, 12, 4.5, 3.2, B); ell(g, 20.5, 12, 4.5, 3.2, B); // маска
+        rect(g, 15, 5, 16, 8, B);
+        ell(g, 16, 18, 4.5, 3, c);
+        ell(g, 16, 25.5, 4.5, 3, c);
+        face(g, p, { ey: 10, my: 18, by: 16, bx: 5 });
+        stamp(g, 15, 16, ['KK']);
+      },
+    },
+    chicks: {
+      name: 'Цыплята-хор', color: Y,
+      build(g, p) {
+        const chick = (cx, cy, ph) => {
+          const sing = p.mouth === 'half' || p.mouth === 'open';
+          const b = sing && ((p.t + ph) & 1) ? -1 : 0;
+          cy += b;
+          const wy = p.flap && ((p.t + ph) & 1) ? cy - 1 : cy + 1;
+          layer(g, (t) => {
+            ell(t, cx - 6, wy, 1.5, 2.5, Y); ell(t, cx + 6, wy, 1.5, 2.5, Y);
+            ell(t, cx, cy, 6, 6, Y);
+            set(t, cx - 1, cy - 7, Y); set(t, cx, cy - 7, Y); set(t, cx, cy - 8, Y);
+            if (cy > 14) { set(t, cx - 3, cy + 6, O); set(t, cx - 2, cy + 6, O); set(t, cx + 1, cy + 6, O); set(t, cx + 2, cy + 6, O); }
+          });
+          const e = EYES_MINI[p.eyes] || EYES_MINI.normal;
+          const mir = p.eyes === 'squint' || p.eyes === 'angry';
+          stamp(g, cx - 3, cy - 2, e); stamp(g, cx + 1, cy - 2, e, 0, mir);
+          stamp(g, cx - 1, cy + 1, BEAK_MINI[p.mouth] || BEAK_MINI.smile);
+          set(g, cx - 5, cy + 1, p.blush === R ? R : P); set(g, cx + 4, cy + 1, p.blush === R ? R : P);
+        };
+        chick(16, 10, 1);
+        chick(9, 21, 0);
+        chick(23, 21, 2);
       },
     },
     robot: {
@@ -237,6 +303,81 @@
         face(g, p, { ey: 9, my: 15, by: 15, bx: 6, beak: true });
       },
     },
+    ghost: {
+      name: 'Призрак', color: W, float: true,
+      build(g, p) {
+        const ph = (p.t >> 1) % 6;
+        ell(g, 3.5, 17 - (p.flap ? 2 : 0), 2, 3, W); ell(g, 28.5, 17 - (p.flap ? 2 : 0), 2, 3, W);
+        ell(g, 16, 13, 11, 10, W);
+        rect(g, 5, 13, 26, 25, W);
+        for (let x = 5; x <= 26; x++) {
+          const k = (x + ph) % 6;
+          if (k !== 5) set(g, x, 26, W);
+          if (k < 3) set(g, x, 27, W);
+        }
+        outline(g);
+        face(g, p, { ey: 10, my: 16, by: 16, bx: 6 });
+      },
+    },
+    snail: {
+      name: 'Улитка-тормоз', color: Y,
+      build(g, p) {
+        const w = [0, 1, 0, -1][(p.t >> 1) % 4];
+        const up = p.earUp > 0 ? 1 : 0;
+        layer(g, (t) => {
+          for (let y = 5; y <= 9; y++) { set(t, 7 + (y < 7 ? w : 0), y, Y); set(t, 14 + (y < 7 ? w + up : 0), y - (y < 7 ? up : 0), Y); }
+          ell(t, 7.5 + w, 3.5, 2.5, 2.5, Y); ell(t, 14.5 + w + up, 3.5 - up, 2.5, 2.5, Y);
+          rect(t, 2, 25, 28, 29, Y); ell(t, 28.5, 27.5, 2.5, 2, Y);
+        });
+        layer(g, (t) => { ell(t, 22.5, 17, 8, 8.5, P); });
+        ell(g, 22.5, 17, 5.5, 6, R); ell(g, 22.5, 17, 4, 4.5, P); ell(g, 22.5, 17, 2, 2.5, R);
+        layer(g, (t) => { ell(t, 11, 17.5, 8.5, 8.5, Y); rect(t, 4, 22, 16, 29, Y); });
+        // лицо на большой голове
+        const f = { ey: 13, lx: 5, my: 20, by: 19, bx: 3 };
+        let kind = p.eyes || 'normal';
+        const st = EYES[kind] || EYES.normal, ew = st[0].length, big = st.length > 5;
+        const mir = kind === 'squint' || kind === 'happy' || kind === 'angry';
+        stamp(g, big ? 4 : 5, big ? 12 : 13, st); stamp(g, big ? 13 : 13, big ? 12 : 13, st, 0, mir);
+        const bl = p.blush === R ? ['RR'] : ['PP'];
+        stamp(g, 3, 19, bl); stamp(g, 18, 19, bl);
+        const m = MOUTH[p.mouth] || MOUTH.smile;
+        stamp(g, 11 - m[0].length / 2, 19, m);
+        set(g, 7 + w, 3, K); set(g, 14 + w + up, 3 - up, K); // точки на рожках
+      },
+    },
+    fish: {
+      name: 'Рыбка', color: O, float: true,
+      build(g, p) {
+        const w = [0, 1, 0, -1][p.t % 4];
+        const fy = p.flap ? -2 : 0;
+        ell(g, 16 + w, 28, 4, 2.2, P);             // хвостик снизу
+        stamp(g, 12, 1, ['..PP....', '.PPPPP..', 'PPPPPPP.']); // спинной плавник
+        ell(g, 3.5, 16 + fy, 2.5, 4, P); ell(g, 28.5, 16 + fy, 2.5, 4, P);
+        ell(g, 16, 15, 11.5, 11.5, O);
+        outline(g);
+        for (const [x, y] of [[9, 7], [10, 6], [11, 6], [21, 6], [22, 6], [23, 7], [14, 5], [15, 4], [16, 4], [17, 5]]) set(g, x, y, c); // чешуйки
+        ell(g, 16, 22, 6.5, 3.5, c);
+        face(g, p, { ey: 10, my: 16, by: 16, bx: 6 });
+      },
+    },
+    penguin: {
+      name: 'Пингвин-рация', color: S,
+      build(g, p) {
+        ell(g, 4.5, 19 - (p.flap ? 2 : 0), 2, 5, S);
+        ell(g, 16, 15.5, 11, 12.5, S);
+        ell(g, 11, 29.3, 3, 1.4, O); ell(g, 21, 29.3, 3, 1.4, O);
+        outline(g);
+        ell(g, 16, 13, 8, 6.5, c);
+        ell(g, 16, 22.5, 7, 5.5, c);
+        face(g, p, { ey: 9, my: 14, by: 15, bx: 7, beak: true });
+        layer(g, (t) => { // рация
+          rect(t, 25, 17, 28, 23, G);
+          rect(t, 27, 11 - (p.earUp > 0 ? 1 : 0), 27, 16, G);
+        });
+        set(g, 26, 18, p.t % 4 < 2 ? R : Y);
+        rect(g, 26, 20, 27, 21, K);
+      },
+    },
     cube: {
       name: 'Случайно', color: Y,
       build(g, p) {
@@ -254,14 +395,16 @@
       },
     },
   };
-  const ORDER = ['squirrel', 'mouse', 'bear', 'robot', 'alien', 'monster', 'parrot', 'cube'];
+  const ORDER = ['squirrel', 'mouse', 'bear', 'raccoon', 'chicks', 'robot', 'alien', 'monster', 'parrot', 'ghost', 'snail', 'fish', 'penguin', 'cube'];
 
   function build(id, pose) {
-    const p = Object.assign({ t: 0, eyes: 'normal', mouth: 'smile', earUp: 0, bob: 0, flap: 0, palm: false, finger: 0 }, pose || {});
+    const p = Object.assign({ t: 0, eyes: 'normal', mouth: 'smile', earUp: 0, bob: 0, flap: 0, palm: false, finger: 0, paws: null, blush: P }, pose || {});
     const ch = CHARS[id];
     const g = grid();
     ch.build(g, p);
     if (p.palm) stamp(g, 16 + (p.finger ? 1 : 0), ch.handY || 11, HAND, P); // «нос-ладошка»
+    if (p.paws === 'cover') { stamp(g, 1, 9 + (p.t & 1), PAW); stamp(g, 26, 9 + ((p.t + 1) & 1), PAW); } // закрыл уши
+    if (p.paws === 'cup') stamp(g, 26, 7, PAW); // лапка к уху
     return g;
   }
 
@@ -286,6 +429,11 @@
   const GLYPHS = {
     q:    ['.KKK.', 'K...K', '....K', '..KK.', '..K..', '.....', '..K..'],
     note: ['..K..', '..KK.', '..K.K', '..K..', 'KKK..', 'KKK..'],
+    z:     ['KKKK', '..K.', '.K..', 'KKKK'],
+    bang:  ['KK', 'KK', 'KK', 'KK', '..', 'KK'],
+    heart: ['.KK.KK.', 'KKKKKKK', 'KKKKKKK', '.KKKKK.', '..KKK..', '...K...'],
+    puff:  ['.KK.', 'K..K', 'K..K', '.KK.'],
+    drop:  ['.K.', 'KKK', 'KKK', '.K.'],
   };
   function glyph(ctx, name, x, y, scale, col) {
     const rows = GLYPHS[name];

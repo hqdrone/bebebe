@@ -1,13 +1,13 @@
 /* Повторялка — офлайн. Оболочка кешируется при установке, шрифты — при первом открытии. */
-const VERSION = 'povt-v1';
+const VERSION = 'povt-v2';
 const FONTS = 'povt-fonts';
 const SHELL = [
-  './', 'index.html', 'style.css', 'app.js', 'sprites.js', 'vad.js', 'manifest.json',
+  './', 'index.html', 'style.css', 'app.js', 'sprites.js', 'vad.js', 'voices.js', 'manifest.json',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png',
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
